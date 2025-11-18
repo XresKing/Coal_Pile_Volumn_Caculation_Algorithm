@@ -47,6 +47,7 @@ class PointCloudFilter:
         self.filtered_pcd = o3d.geometry.PointCloud()
         self.filtered_pcd.points = o3d.utility.Vector3dVector(filtered_points)
 
+        # 地点和非地点过滤
         points2 = np.asarray(self.filtered_pcd.points)
         _, non_ground = self.csf_algorithm.csf_seperation(points2)
         re_filtered_points = points2[non_ground]
@@ -55,6 +56,85 @@ class PointCloudFilter:
         self.re_filtered_pcd.points = o3d.utility.Vector3dVector(re_filtered_points)
 
         print("点云过滤完成")
+
+    def remove_outliers(self, pcd, nb_neighbors=20, std_ratio=2.0):
+        """
+        使用统计离群点移除算法过滤点云中没有足够邻居的点。
+        :param pcd: 输入点云
+        :param nb_neighbors: 每个点的邻域大小（邻居数）
+        :param std_ratio: 标准差倍数，用于判定离群点的阈值
+        :return: 过滤后的点云
+        """
+        # 使用统计离群点移除方法
+        cl, ind = pcd.remove_statistical_outlier(nb_neighbors=nb_neighbors, std_ratio=std_ratio)
+
+        # 根据返回的索引选择有效点
+        filtered_pcd = pcd.select_by_index(ind)
+
+        return filtered_pcd
+
+    def filter_by_normal_z(self, pcd, z_threshold=0.2, radius=0.9, max_nn=30):
+        """
+        计算点云的法线，使用PCA进行法线计算,通过法线的z分量过滤点云，分离煤堆和墙壁。
+        :param pcd: 输入的点云
+        :param z_threshold: 法线z分量的阈值
+        :param radius: 用于法线计算的邻域半径
+        :param max_nn: 用于法线计算的最大邻居点数
+        :return: 返回煤堆点云和墙壁点云
+        """
+        pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=radius, max_nn=max_nn))
+
+        normals = np.asarray(pcd.normals)
+        points = np.asarray(pcd.points)
+
+        # 计算法线的z分量（dot product with vertical direction）
+        z_values = np.abs(normals[:, 2])
+
+        # 过滤掉法线z值小于阈值的点（这些通常是墙壁）
+        valid_indices = np.where(z_values >= z_threshold)[0]
+
+        # 提取煤堆点云
+        coal_pile_points = pcd.select_by_index(valid_indices)
+
+        # 提取墙壁点云
+        invalid_indices = np.setdiff1d(np.arange(len(points)), valid_indices)
+        wall_points = pcd.select_by_index(invalid_indices)
+
+        return coal_pile_points, wall_points
+
+    def filter_by_normal_y(self, pcd, z_threshold=0.2, y_threshold=-0.9):
+        """
+        根据法线方向和与z轴的夹角过滤点云，去除法线朝向 -y 方向且与z轴夹角小于阈值的点。
+        :param pcd: 输入点云
+        :param angle_threshold: 法线与z轴夹角的阈值（单位：度）
+        :param y_threshold: 法线的y分量的阈值，朝向 -y 方向的点会被过滤
+        :return: 过滤后的点云
+        """
+        # 估计法线
+        #pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+
+        # 获取法线数据
+        normals = np.asarray(pcd.normals)
+        points = np.asarray(pcd.points)
+
+        # 计算法线与z轴的夹角（dot product with vertical direction, which is just the z component）
+        z_values = normals[:, 2]
+        y_values = normals[:, 1]
+
+        # 计算法线与z轴的夹角
+        angles = np.arccos(np.clip(z_values, -1.0, 1.0))  # 法线与z轴的夹角（弧度）
+
+        # 将夹角转换为度
+        angles_deg = np.degrees(angles)
+
+        # 过滤掉法线朝向 -y 方向且与z轴夹角小于阈值的点
+        valid_indices = np.where((normals[:, 1] > y_threshold) & (np.abs(normals[:, 2]) > z_threshold))[0]
+        #valid_indices = np.where((y_values > y_threshold) and (y_values < -y_threshold))[0]
+
+        # 提取有效点云
+        filtered_pcd = pcd.select_by_index(valid_indices)
+
+        return filtered_pcd
 
     def visualize(self):
         if len(self.pcd.points) == 0:
@@ -66,7 +146,7 @@ class PointCloudFilter:
 
         self.pcd.paint_uniform_color([0.5, 0.5, 0.5])  # 灰色
         self.filtered_pcd.paint_uniform_color([1, 0, 0])  # 红色
-        self.re_filtered_pcd.paint_uniform_color([0, 0, 1]) #蓝色
+        self.re_filtered_pcd.paint_uniform_color([0, 1, 0]) #蓝色
         if self.filtered_pcd is not None and len(self.filtered_pcd.points) > 0:
             geometries = [self.re_filtered_pcd,self.pcd, axis]
         else:
@@ -88,7 +168,7 @@ class PointCloudFilter:
         view_control.set_front([0.5, 0.5, 0.5])  # 摄像头朝向
         view_control.set_lookat([0, 0, 0])  # 聚焦点
         view_control.set_up([0, 0, 1])  # 摄像头的"上"方向
-        view_control.set_zoom(0.2)  # 摄像头的缩放
+        view_control.set_zoom(0.1)  # 摄像头的缩放
 
         # 渲染点云
         vis.run()
@@ -109,8 +189,13 @@ if __name__ == "__main__":
 
     # 应用过滤器
     filter.apply_pass_through_filter(min_bound, max_bound)
+    filter.re_filtered_pcd,_ = filter.filter_by_normal_z(filter.re_filtered_pcd, z_threshold=0.2, radius=2.114514,max_nn=70)
+    filter.re_filtered_pcd = filter.remove_outliers(filter.re_filtered_pcd, nb_neighbors=20, std_ratio=1.0)
+    filter.re_filtered_pcd = filter.filter_by_normal_y(filter.re_filtered_pcd, z_threshold=0.2, y_threshold= -0.7)
     print(filter.filtered_pcd)
     print(filter.re_filtered_pcd)
 
     # 可视化
     filter.visualize()
+
+    o3d.visualization.draw_geometries([filter.re_filtered_pcd], point_show_normal=True)

@@ -135,13 +135,10 @@ class PointCloudFilter:
         '''
         计算好的平面方程
         '''
-        # 这里为了演示，假设使用硬编码的参数或者之前的逻辑
-        # 如果你有实际的 RANSAC 逻辑，请保持原样
-        # a, b, c, d, inlier_cloud, outlier_cloud = extract_plane_ransac(self.pcd)
-        # 暂时使用原来的逻辑（注释掉的部分保持原样）
-        b = 5
-        while not (-0.025016494596247017 <= b <= 0.018158658795456674):
-            a, b, c, d, inlier_cloud, outlier_cloud = extract_plane_ransac(self.pcd)
+        a, b, c, d, inlier_cloud, outlier_cloud = extract_plane_ransac(self.pcd)
+        #b = 5
+        #while not (-0.025016494596247017 <= b <= 0.018158658795456674):
+            #a, b, c, d, inlier_cloud, outlier_cloud = extract_plane_ransac(self.pcd)
 
         print(f"raw pcd: {self.pcd}")
         print(f"inlier_cloud is {inlier_cloud}")
@@ -264,8 +261,11 @@ class PointCloudFilter:
 # 使用示例
 if __name__ == "__main__":
     # 创建点云过滤器对象
-    # 请确保路径正确
-    filter = PointCloudFilter(r"./map_900m/map_900m.pcd")
+    #filter = PointCloudFilter(r"./map_900m/map_900m.pcd")
+    #filter = PointCloudFilter(r"E:\SLAM\GuangXiSteel\Coal_Algorithm\verificares\sim_cone_perfect.pcd")
+    filter = PointCloudFilter(r"E:\SLAM\GuangXiSteel\Coal_Algorithm\verificares\sim_cone_with_ground.pcd")
+    #filter = PointCloudFilter(r"E:\SLAM\GuangXiSteel\Coal_Algorithm\verificares\sim_deformation_test.pcd")
+
 
     filter.ransac()
 
@@ -277,10 +277,9 @@ if __name__ == "__main__":
     filter.pass_through_filter(min_bound, max_bound)
 
     # 进一步处理
-    filter.re_filtered_pcd, _ = filter.filter_by_normal_z(filter.re_filtered_pcd, z_threshold=0.2, radius=2.114514,
-                                                          max_nn=70)
-    filter.re_filtered_pcd = filter.remove_outliers(filter.re_filtered_pcd, nb_neighbors=20, std_ratio=1.0)
-    filter.re_filtered_pcd = filter.filter_by_normal_y(filter.re_filtered_pcd, z_threshold=0.2, y_threshold=-0.7)
+    filter.re_filtered_pcd, _ = filter.filter_by_normal_z(filter.re_filtered_pcd, z_threshold=0.2, radius=2.114514,max_nn=70)
+    #filter.re_filtered_pcd = filter.remove_outliers(filter.re_filtered_pcd, nb_neighbors=20, std_ratio=1.0)
+    #filter.re_filtered_pcd = filter.filter_by_normal_y(filter.re_filtered_pcd, z_threshold=0.2, y_threshold=-0.7)
 
     # 聚类
     clusters = filter.euclidean_clustering(filter.re_filtered_pcd, eps=5, min_points=50)

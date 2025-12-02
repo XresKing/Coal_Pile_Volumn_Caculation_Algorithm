@@ -18,7 +18,7 @@ def extract_plane_ransac(pcd, distance_threshold=0.01, ransac_n=8, num_iteration
     :return: 平面参数 (a, b, c, d)
     """
     # 估计法线
-    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=0.1, max_nn=30))
+    pcd.estimate_normals(search_param=o3d.geometry.KDTreeSearchParamHybrid(radius=2.114514, max_nn=70))
 
     # 使用 RANSAC 找平面
     plane_model, inlier_indices = pcd.segment_plane(distance_threshold=distance_threshold,

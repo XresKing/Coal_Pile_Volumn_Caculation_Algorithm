@@ -14,7 +14,7 @@ class PointCloudFilter:
         self.csf_algorithm = CSF_Algorithm()
         print(f"点云加载完成：{file_path}")
 
-    def ransac(self):
+    def ransac(self) -> None:
         '''
         计算好的平面方程
         0.03394383016525596x + 0.0007017434695681669y + 0.9994234957963593z + -5.196453441143198 = 0
@@ -33,10 +33,11 @@ class PointCloudFilter:
         self.ground = rotate_to_horizontal(inlier_cloud, a, b, c, d)
         o3d.io.write_point_cloud(r"./map_900m/map_900m_ransac.pcd", self.pcd)
 
-    def apply_pass_through_filter(self, min_bound, max_bound):
+    def pass_through_filter(self, min_bound, max_bound) -> None:
         """
         :param min_bound: 最小边界 (x_min, y_min, z_min)
         :param max_bound: 最大边界 (x_max, y_max, z_max)
+        :return None
         """
         points = np.asarray(self.pcd.points)
         # 使用条件过滤
@@ -57,7 +58,7 @@ class PointCloudFilter:
 
         print("点云过滤完成")
 
-    def remove_outliers(self, pcd, nb_neighbors=20, std_ratio=2.0):
+    def remove_outliers(self, pcd, nb_neighbors=20, std_ratio=2.0) -> o3d.geometry.PointCloud:
         """
         使用统计离群点移除算法过滤点云中没有足够邻居的点。
         :param pcd: 输入点云
@@ -73,7 +74,7 @@ class PointCloudFilter:
 
         return filtered_pcd
 
-    def filter_by_normal_z(self, pcd, z_threshold=0.2, radius=0.9, max_nn=30):
+    def filter_by_normal_z(self, pcd, z_threshold=0.2, radius=0.9, max_nn=30) -> o3d.geometry.PointCloud:
         """
         计算点云的法线，使用PCA进行法线计算,通过法线的z分量过滤点云，分离煤堆和墙壁。
         :param pcd: 输入的点云
@@ -102,7 +103,7 @@ class PointCloudFilter:
 
         return coal_pile_points, wall_points
 
-    def filter_by_normal_y(self, pcd, z_threshold=0.2, y_threshold=-0.9):
+    def filter_by_normal_y(self, pcd, z_threshold=0.2, y_threshold=-0.9) -> o3d.geometry.PointCloud:
         """
         根据法线方向和与z轴的夹角过滤点云，去除法线朝向 -y 方向且与z轴夹角小于阈值的点。
         :param pcd: 输入点云
@@ -136,7 +137,30 @@ class PointCloudFilter:
 
         return filtered_pcd
 
-    def visualize(self):
+    def euclidean_clustering(self,pcd, eps=0.05, min_points=10):
+        """
+        使用DBSCAN进行欧几里得聚类，分离不同的点云聚类。
+        :param pcd: 输入点云
+        :param eps: 聚类的最大距离（单位：米）
+        :param min_points: 每个聚类中最小的点数
+        :return: 聚类后的点云列表
+        """
+        # 计算DBSCAN聚类
+        labels = np.array(pcd.cluster_dbscan(eps=eps, min_points=min_points))
+
+        max_label = labels.max()
+        print(f"点云包含 {max_label + 1} 个聚类。")
+
+        # 按照标签分割点云
+        clustered_points = []
+        for i in range(max_label + 1):
+            cluster = pcd.select_by_index(np.where(labels == i)[0])
+            if not(len(np.asarray(cluster.points)) < 100):
+                clustered_points.append(cluster)
+
+        return clustered_points
+
+    def visualize(self) -> None:
         if len(self.pcd.points) == 0:
             print("警告：原始点云为空，无法进行可视化。")
             return
@@ -146,7 +170,7 @@ class PointCloudFilter:
 
         self.pcd.paint_uniform_color([0.5, 0.5, 0.5])  # 灰色
         self.filtered_pcd.paint_uniform_color([1, 0, 0])  # 红色
-        self.re_filtered_pcd.paint_uniform_color([0, 1, 0]) #蓝色
+       # self.re_filtered_pcd.paint_uniform_color([0, 1, 0]) #蓝色
         if self.filtered_pcd is not None and len(self.filtered_pcd.points) > 0:
             geometries = [self.re_filtered_pcd,self.pcd, axis]
         else:
@@ -188,14 +212,22 @@ if __name__ == "__main__":
     min_bound = np.array([-1265.0, -50.0, -10.0])  # 最小边界 [x_min, y_min, z_min]
 
     # 应用过滤器
-    filter.apply_pass_through_filter(min_bound, max_bound)
+    filter.pass_through_filter(min_bound, max_bound)
     filter.re_filtered_pcd,_ = filter.filter_by_normal_z(filter.re_filtered_pcd, z_threshold=0.2, radius=2.114514,max_nn=70)
     filter.re_filtered_pcd = filter.remove_outliers(filter.re_filtered_pcd, nb_neighbors=20, std_ratio=1.0)
     filter.re_filtered_pcd = filter.filter_by_normal_y(filter.re_filtered_pcd, z_threshold=0.2, y_threshold= -0.7)
+    clusters = filter.euclidean_clustering(filter.re_filtered_pcd, eps=5, min_points=50)
     print(filter.filtered_pcd)
     print(filter.re_filtered_pcd)
 
-    # 可视化
-    filter.visualize()
+    all_cluster = o3d.geometry.PointCloud()
 
-    o3d.visualization.draw_geometries([filter.re_filtered_pcd], point_show_normal=True)
+    for i, cluster in enumerate(clusters):
+        print(f"Cluster {i + 1} contains {len(np.asarray(cluster.points))} points.")
+        cluster.paint_uniform_color(np.random.rand(3))  # 为每个聚类着色
+        all_cluster += cluster
+
+    # 可视化
+    #filter.visualize()
+
+    o3d.visualization.draw_geometries([all_cluster], window_name="All Clusters Combined")

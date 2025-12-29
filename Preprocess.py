@@ -3,16 +3,18 @@ import numpy as np
 from CSFpocess import *
 from RANSAC import *
 from scipy.spatial import Delaunay
-from scipy.optimize import leastsq
+# 关键修改：引入更鲁棒的 least_squares 替代简单的 leastsq
+from scipy.optimize import least_squares
 from dataclasses import dataclass
 
 
 @dataclass
 class ProcessingConfig:
-    # --- 预处理参数 ---
+    # --- 预处理参数 (单位: 米) ---
     voxel_size: float = 0.5  # 降采样体素大小 (m)
 
-    # --- 范围裁剪 ---
+    # --- 范围裁剪 (单位: 米) ---
+    # 务必确保这里的值与你的点云坐标系一致
     min_bound: tuple = (-1265.0, -50.0, -10.0)
     max_bound: tuple = (10.0, 20.0, 14.0)
 
@@ -33,7 +35,7 @@ class ProcessingConfig:
     cluster_min_points: int = 50
 
     # --- 切片分段参数 (Grid Sectioning) ---
-    # 切片步长，默认为 100米
+    # 新增：切片步长，默认为 100米
     section_step: float = 100.0
 
     # --- 体积计算参数 ---
@@ -55,6 +57,9 @@ class CoalVolumeCalculator:
         return z - self._quadratic_surface(params, x, y)
 
     def fit_ground_surface(self, ground_points):
+        """
+        拟合地面基准面 (改进版：使用鲁棒回归)
+        """
         if len(ground_points) < 100:
             print("错误：地面点数量不足，无法拟合。")
             return None
@@ -65,10 +70,21 @@ class CoalVolumeCalculator:
         initial_guess = [0, 0, 0, 0, 0, np.mean(z)]
 
         try:
-            params, _ = leastsq(self._error_func, initial_guess, args=(x, y, z))
-            self.ground_params = params
-            # print(f"地面拟合参数: {params}")
-            return params
+            # 关键修改：使用 least_squares 配合 'soft_l1' 损失函数
+            # 之前的 leastsq 是最小二乘法，对噪点（离群点）非常敏感。
+            # 地面点中只要混入少量煤堆底部的点，就会把整个基准面拉高，导致体积计算剧烈波动。
+            # 'soft_l1' 能有效忽略这些离群噪点，锁定真正的地面层。
+            res = least_squares(
+                self._error_func,
+                initial_guess,
+                args=(x, y, z),
+                loss='soft_l1',  # 鲁棒损失函数
+                f_scale=0.5  # 异常值阈值 (0.5m)，超过这个距离的点权重迅速降低
+            )
+
+            self.ground_params = res.x
+            # print(f"地面拟合参数: {self.ground_params}")
+            return self.ground_params
         except Exception as e:
             print(f"地面拟合失败: {e}")
             return None
@@ -149,10 +165,7 @@ class PointCloudFilter:
         print(f"点云加载完成，降采样 voxel_size={self.config.voxel_size}m")
 
     def ransac(self) -> None:
-        b = 5
-        while not (-0.025016494596247017 <= b <= 0.018158658795456674):
-            a, b, c, d, inlier_cloud, outlier_cloud = extract_plane_ransac(self.pcd)
-        #a, b, c, d, inlier_cloud, outlier_cloud = extract_plane_ransac(self.pcd)
+        a, b, c, d, inlier_cloud, outlier_cloud = extract_plane_ransac(self.pcd)
         print(f"RANSAC 完成。参数: a={a:.4f}, b={b:.4f}, c={c:.4f}, d={d:.4f}")
         self.pcd = rotate_to_horizontal(self.pcd, a, b, c, d)
 
@@ -216,9 +229,6 @@ class PointCloudFilter:
         return pcd.select_by_index(valid_indices)
 
     def euclidean_clustering(self, pcd):
-        """
-        DBSCAN 密度聚类
-        """
         labels = np.array(pcd.cluster_dbscan(
             eps=self.config.cluster_eps,
             min_points=self.config.cluster_min_points
@@ -235,11 +245,10 @@ class PointCloudFilter:
 
     def grid_section_clustering(self, pcd):
         """
-        切片聚类
-        使用直通滤波的X轴范围作为仓库总长，按 section_step 进行切片。
+        [新方法] 线性切片分段聚类
+        逻辑：使用直通滤波的X轴范围作为仓库总长，按 section_step 进行切片。
         """
         # 使用 Config 中的边界作为仓库的绝对参考，而不是点云的 min/max
-        # 这样即使开头没有煤，也会从仓库起点开始算距离
         wh_start_x = self.config.min_bound[0]
         wh_end_x = self.config.max_bound[0]
         step = self.config.section_step
@@ -254,14 +263,12 @@ class PointCloudFilter:
             return []
 
         # 生成分段区间
-        # arange 不包含终点，所以加一点 buffer
         sections = np.arange(wh_start_x, wh_end_x, step)
 
         for i, start_x in enumerate(sections):
             end_x = start_x + step
 
             # 找到在当前 X 区间内的点索引
-            # 假设 X 轴是主轴 (index 0)
             indices = np.where((points_np[:, 0] >= start_x) & (points_np[:, 0] < end_x))[0]
 
             if len(indices) > 50:  # 过滤掉噪点极少的切片
@@ -269,8 +276,6 @@ class PointCloudFilter:
                 section_pcd = pcd.select_by_index(indices)
                 clustered_points.append(section_pcd)
             else:
-                # 即使没有点，为了保持索引顺序，可能需要占位？
-                # 题目要求是计算体积，空切片体积为0，不返回点云对象即可
                 pass
 
         print(f"[Grid] 切片完成: 生成 {len(clustered_points)} 个有效分段")
